@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp Pairing</title>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background: linear-gradient(to bottom, #ffffff, #ebebeb);
+      font-family: Arial, sans-serif;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .box {
+      width: 300px;
+      padding: 20px;
+      text-align: center;
+      background-color: #fff;
+      border-radius: 10px;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.7);
+    }
+
+    .input-container {
+      display: flex;
+      background: #e8e8e8;
+      border-radius: 1rem;
+      padding: 0.3rem;
+      gap: 0.3rem;
+      width: 100%;
+    }
+
+    .input-container input {
+      width: 100%;
+      padding: 1rem;
+      border: none;
+      border-radius: 0.8rem;
+      color: #5e5e5e;
+    }
+
+    .input-container button {
+      padding: 1rem;
+      background: #4998FF;
+      color: white;
+      border: none;
+      border-radius: 0.8rem;
+      cursor: pointer;
+    }
+
+    .input-container button:hover {
+      background: #367ac7;
+    }
+
+    .centered-text {
+      color: black;
+      font-weight: bold;
+    }
+
+    #creds-container {
+      margin-top: 20px;
+      display: none;
+      background-color: #f1f1f1;
+      padding: 10px;
+      border-radius: 5px;
+      white-space: pre-wrap;
+      font-family: monospace;
+      color: black;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="box">
+      <h3 class="centered-text">WhatsApp Pairing</h3>
+      <p class="centered-text">Enter your phone number:</p>
+      <div class="input-container">
+        <input type="text" id="number" placeholder="Enter phone number with country code">
+        <button onclick="submitNumber()">Submit</button>
+      </div>
+      <p id="waiting-message" style="display: none; color: black;">Please wait...</p>
+      <p id="code-message" style="display: none; color: red;" onclick="copyCode()">Code: <span id="code"></span></p>
+      <div id="creds-container"></div>
+    </div>
+  </div>
+
+  <script>
+    async function submitNumber() {
+      const number = document.getElementById("number").value;
+      if (!number) {
+        alert("Please enter a phone number.");
+        return;
+      }
+      
+      document.getElementById("waiting-message").style.display = "block";
+      
+      const response = await fetch('/get-pairing-code', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ number }),
+      });
+      
+      const data = await response.json();
+      
+      if (data.code) {
+        document.getElementById("waiting-message").style.display = "none";
+        document.getElementById("code-message").style.display = "block";
+        document.getElementById("code").innerText = data.code;
+
+        // Display the contents of creds.json
+        if (data.credsContent) {
+          const credsContainer = document.getElementById("creds-container");
+          credsContainer.style.display = "block";
+          credsContainer.textContent = data.credsContent;
+        }
+      } else {
+        alert("Error: " + data.error);
+      }
+    }
+
+    function copyCode() {
+      const code = document.getElementById("code").innerText;
+      navigator.clipboard.writeText(code).then(() => {
+        alert("Code copied!");
+      });
+    }
+  </script>
+</body>
+</html>
