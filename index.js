@@ -1,50 +1,31 @@
-const express = require("express");
-const qrcode = require("qrcode-terminal");
-const fs = require("fs");
-const pino = require("pino");
-const {
-  default: makeWASocket,
-  Browsers,
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion,
-  PHONENUMBER_MCC,
-} = require("@whiskeysockets/baileys");
-const NodeCache = require("node-cache");
-const chalk = require("chalk");
-const readline = require("readline");
+const express = require('express');
+const bodyParser = require('body-parser');
+const fs = require('fs');
+const pino = require('pino');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
+const NodeCache = require('node-cache');
+const readline = require('readline');
+const chalk = require('chalk');
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = 3000;
+const msgRetryCounterCache = new NodeCache();
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
+app.use(bodyParser.json());
+app.use(express.static('public'));  // To serve the HTML file
 
-app.get("/pairing/getcode", async (req, res) => {
-  const phoneNumber = req.query.phone;
+let phoneNumber = ''; // Global phone number
 
-  if (!phoneNumber) {
-    return res.status(400).json({ error: "Phone number is required." });
-  }
-
-  try {
-    const pairingCode = await generatePairingCode(phoneNumber);
-    return res.status(200).json({ code: pairingCode });
-  } catch (error) {
-    return res.status(400).json({ error: error.message });
-  }
-});
-
-async function generatePairingCode(phoneNumber) {
-  let { version } = await fetchLatestBaileysVersion();
-  const { state, saveCreds } = await useMultiFileAuthState(`./sessions`);
-  const msgRetryCounterCache = new NodeCache();
-
-  const XeonBotInc = makeWASocket({
-    logger: pino({ level: "silent" }),
-    printQRInTerminal: false,
-    browser: Browsers.windows("Firefox"),
+// Function to get pairing code from Baileys
+async function getPairingCode(number) {
+  const { version, isLatest } = await fetchLatestBaileysVersion();
+  const { state, saveCreds } = await useMultiFileAuthState('./sessions');
+  
+  const socket = makeWASocket({
+    logger: pino({ level: 'silent' }),
+    printQRInTerminal: true,
+    browser: Browsers.windows('Firefox'),
     auth: {
       creds: state.creds,
       keys: state.keys,
@@ -52,109 +33,45 @@ async function generatePairingCode(phoneNumber) {
     msgRetryCounterCache,
   });
 
-  return new Promise((resolve, reject) => {
-    phoneNumber = phoneNumber.replace(/[^0-9]/g, "");
-    if (!Object.keys(PHONENUMBER_MCC).some((v) => phoneNumber.startsWith(v))) {
-      return reject("Invalid phone number format. Use country code, e.g., 93730285765.");
-    }
+  phoneNumber = number;
+  
+  try {
+    const code = await socket.requestPairingCode(phoneNumber);
 
-    setTimeout(async () => {
-      try {
-        let code = await XeonBotInc.requestPairingCode(phoneNumber);
-        code = code?.match(/.{1,4}/g)?.join("-") || code;
-        resolve(code);
-      } catch (error) {
-        reject(error);
-      }
-    }, 3000);
-  });
+    // After generating the pairing code, read the creds.json file and send it to the user
+    const credsFile = './sessions/creds.json';
+    if (fs.existsSync(credsFile)) {
+      const credsContent = fs.readFileSync(credsFile, 'utf-8');
+      return { code, credsContent };
+    } else {
+      return { code, credsContent: null };
+    }
+  } catch (error) {
+    console.error(chalk.red('Error generating pairing code'), error);
+    return { code: null, credsContent: null };
+  }
 }
 
-app.get("/pairing/session", async (req, res) => {
-  try {
-    const sessionFile = fs.readFileSync("./sessions/creds.json", "utf-8");
-    return res.status(200).json({ sessionId: "SESSION ID GENERATED SUCCESSFULLY", creds: JSON.parse(sessionFile) });
-  } catch (error) {
-    return res.status(500).json({ error: "Failed to read session file." });
+// Endpoint to receive phone number and send pairing code along with creds.json content
+app.post('/get-pairing-code', async (req, res) => {
+  const { number } = req.body;
+  if (!number) {
+    return res.status(400).json({ error: 'Phone number is required' });
+  }
+
+  const { code, credsContent } = await getPairingCode(number);
+  
+  if (code) {
+    const response = { code };
+    if (credsContent) {
+      response.credsContent = credsContent;
+    }
+    return res.json(response);
+  } else {
+    return res.status(500).json({ error: 'Failed to generate pairing code' });
   }
 });
 
-// راه‌اندازی سرور Express
 app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
-
-async function qr() {
-  let { version, isLatest } = await fetchLatestBaileysVersion();
-  const { state, saveCreds } = await useMultiFileAuthState(`./sessions`);
-  const msgRetryCounterCache = new NodeCache();
-
-  const XeonBotInc = makeWASocket({
-    logger: pino({ level: "silent" }),
-    printQRInTerminal: false,
-    browser: Browsers.windows("Firefox"),
-    auth: {
-      creds: state.creds,
-      keys: state.keys,
-    },
-    msgRetryCounterCache,
-  });
-
-  XeonBotInc.ev.on("connection.update", async (s) => {
-    const { connection, lastDisconnect } = s;
-    if (connection === "open") {
-      await delay(1000 * 10);
-      await XeonBotInc.sendMessage(XeonBotInc.user.id, {
-        text: `*SESSION ID GENERATED SUCCESSFULLY* ✅\n`,
-      });
-      let sessionXeon = fs.readFileSync("./sessions/creds.json", "utf-8");
-      await delay(1000 * 2);
-      const xeonses = await XeonBotInc.sendMessage(XeonBotInc.user.id, {
-        text: sessionXeon,
-      });
-      await XeonBotInc.sendMessage(XeonBotInc.user.id, {
-        text: `*SESSION ID GENERATED SUCCESSFULLY* ✅\n
-        *Gɪᴠᴇ ᴀ ꜱᴛᴀʀ ᴛᴏ ʀᴇᴘᴏ ꜰᴏʀ ᴄᴏᴜʀᴀɢᴇ* 🌟
-        https://github.com/TraderAn-King/Ben-bot
-
-        *Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ ꜰᴏʀ ϙᴜᴇʀʏ* 💭
-        https://t.me/Ronix_tech
-        https://whatsapp.com/channel/0029Vasu3qP9RZAUkVkvSv32
-
-        *Yᴏᴜ-ᴛᴜʙᴇ ᴛᴜᴛᴏʀɪᴀʟꜱ* 🪄 
-        https://whatsapp.com/channel/0029Vasu3qP9RZAUkVkvSv32
-
-        *BEN-WHATSAPP-BOT* 🥀`,
-      }, { quoted: xeonses });
-      await delay(1000 * 2);
-      process.exit(0);
-    }
-    if (
-      connection === "close" &&
-      lastDisconnect &&
-      lastDisconnect.error &&
-      lastDisconnect.error.output.statusCode != 401
-    ) {
-      qr();
-    }
-  });
-  XeonBotInc.ev.on("creds.update", saveCreds);
-  XeonBotInc.ev.on("messages.upsert", () => {});
-}
-
-qr();
-
-process.on("uncaughtException", function (err) {
-  let e = String(err);
-  if (
-    e.includes("conflict") ||
-    e.includes("not-authorized") ||
-    e.includes("Socket connection timeout") ||
-    e.includes("rate-overlimit") ||
-    e.includes("Connection Closed") ||
-    e.includes("Timed Out") ||
-    e.includes("Value not found")
-  )
-    return;
-  console.log("Caught exception: ", err);
+  console.log(`Server is running on http://localhost:${port}`);
 });
